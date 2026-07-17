@@ -7,12 +7,15 @@ export function Poster({
   className = "",
   sizes = "(max-width: 768px) 40vw, 200px",
   priority = false,
+  /** Skip Next optimizer — same URL as browser prefetch (battle mode). */
+  unoptimized = false,
 }: {
   path: string | null | undefined;
   title: string;
   className?: string;
   sizes?: string;
   priority?: boolean;
+  unoptimized?: boolean;
 }) {
   const src = posterUrl(path, "w342");
 
@@ -26,6 +29,7 @@ export function Poster({
           sizes={sizes}
           className="object-cover"
           priority={priority}
+          unoptimized={unoptimized}
         />
       ) : (
         <div className="flex h-full w-full items-center justify-center bg-ink-3 p-3 text-center text-xs text-bone/40">

@@ -608,16 +608,26 @@ async function touchList(listId: string) {
     .eq("id", listId);
 }
 
-/** Sync positions for ranked rows only (single-field updates in parallel). */
-async function syncPositions(items: ListItem[]) {
+/** Patch only rows whose position changed (incl. ranked ↔ bench). */
+async function syncChangedPositions(
+  previous: ListItem[],
+  next: ListItem[],
+) {
+  const prevById = new Map(previous.map((i) => [i.id, i]));
+  const changed = next.filter((item) => {
+    const prev = prevById.get(item.id);
+    if (!prev) return false;
+    return prev.position !== item.position;
+  });
+  if (!changed.length) return;
+
   const supabase = createClient();
-  const ranked = items.filter((i) => i.position != null);
-  if (!ranked.length) return;
+  const now = new Date().toISOString();
   await Promise.all(
-    ranked.map((i) =>
+    changed.map((i) =>
       supabase
         .from("list_items")
-        .update({ position: i.position, updated_at: new Date().toISOString() })
+        .update({ position: i.position, updated_at: now })
         .eq("id", i.id),
     ),
   );
@@ -697,18 +707,39 @@ export async function addMovie(
   return mapItem(data as Record<string, unknown>);
 }
 
+/**
+ * Persist a client-computed reorder. Prefer previous+next so only shifted
+ * positions are written (no full-list rewrite).
+ */
 export async function reorderRanked(
   listId: string,
   orderedIds: string[],
   nextItems?: ListItem[],
+  previousItems?: ListItem[],
 ) {
   const auth = await resolveAuth();
   if (!auth.cloud) {
     reorderLocalRanked(listId, orderedIds);
     return;
   }
+  if (nextItems && previousItems) {
+    await syncChangedPositions(previousItems, nextItems);
+    void touchList(listId);
+    return;
+  }
   if (nextItems) {
-    await syncPositions(nextItems);
+    // Legacy: no previous snapshot — write all ranked positions
+    const supabase = createClient();
+    const now = new Date().toISOString();
+    const ranked = nextItems.filter((i) => i.position != null);
+    await Promise.all(
+      ranked.map((i) =>
+        supabase
+          .from("list_items")
+          .update({ position: i.position, updated_at: now })
+          .eq("id", i.id),
+      ),
+    );
     void touchList(listId);
     return;
   }
@@ -729,10 +760,16 @@ export async function moveToBench(
   listId: string,
   itemId: string,
   nextItems?: ListItem[],
+  previousItems?: ListItem[],
 ) {
   const auth = await resolveAuth();
   if (!auth.cloud) {
     moveLocalToBench(listId, itemId);
+    return;
+  }
+  if (nextItems && previousItems) {
+    await syncChangedPositions(previousItems, nextItems);
+    void touchList(listId);
     return;
   }
   const supabase = createClient();
@@ -741,7 +778,7 @@ export async function moveToBench(
     .update({ position: null, updated_at: new Date().toISOString() })
     .eq("id", itemId);
   if (error) throw new Error(error.message);
-  if (nextItems) await syncPositions(nextItems);
+  if (nextItems) await syncChangedPositions([], nextItems);
   void touchList(listId);
 }
 
@@ -749,6 +786,7 @@ export async function removeItem(
   listId: string,
   itemId: string,
   nextItems?: ListItem[],
+  previousItems?: ListItem[],
 ) {
   const auth = await resolveAuth();
   if (!auth.cloud) {
@@ -764,7 +802,12 @@ export async function removeItem(
   const supabase = createClient();
   const { error } = await supabase.from("list_items").delete().eq("id", itemId);
   if (error) throw new Error(error.message);
-  if (nextItems) await syncPositions(nextItems);
+  if (nextItems && previousItems) {
+    const prevWithout = previousItems.filter((i) => i.id !== itemId);
+    await syncChangedPositions(prevWithout, nextItems);
+  } else if (nextItems) {
+    await syncChangedPositions([], nextItems);
+  }
   void touchList(listId);
 }
 
@@ -808,18 +851,21 @@ export async function promoteItem(
   void touchList(listId);
 }
 
-export async function applyBattle(
-  listId: string,
+export type BattleOutcome = {
+  items: ListItem[];
+  winnerElo: number;
+  loserElo: number;
+  eloWinnerBefore: number;
+  eloLoserBefore: number;
+};
+
+/** Pure Elo + reorder — no network. Use for instant battle UI. */
+export function computeBattleOutcome(
+  items: ListItem[],
   winnerId: string,
   loserId: string,
   draw = false,
-) {
-  const auth = await resolveAuth();
-  if (!auth.cloud || !auth.userId) {
-    return applyLocalBattle(listId, winnerId, loserId, draw);
-  }
-
-  const { items } = await fetchListBundle(listId);
+): BattleOutcome {
   const winner = items.find((i) => i.id === winnerId);
   const loser = items.find((i) => i.id === loserId);
   if (!winner || !loser) throw new Error("Items missing");
@@ -847,22 +893,127 @@ export async function applyBattle(
     ...ranked,
     ...benchOnly.map((i) => ({ ...i, position: null as number | null })),
   ];
-  await persistCloudItems(listId, merged);
+
+  return {
+    items: merged,
+    winnerElo: next.winner,
+    loserElo: next.loser,
+    eloWinnerBefore: winner.elo,
+    eloLoserBefore: loser.elo,
+  };
+}
+
+/** Persist a battle already computed client-side (background-friendly). */
+export async function persistBattleOutcome(
+  listId: string,
+  winnerId: string,
+  loserId: string,
+  draw: boolean,
+  outcome: BattleOutcome,
+  previousItems: ListItem[],
+) {
+  const auth = await resolveAuth();
+  if (!auth.cloud || !auth.userId) {
+    applyLocalBattle(listId, winnerId, loserId, draw);
+    return;
+  }
 
   const supabase = createClient();
-  await supabase.from("battles").insert({
+  const now = new Date().toISOString();
+  const prevById = new Map(previousItems.map((i) => [i.id, i]));
+  const byId = new Map(outcome.items.map((i) => [i.id, i]));
+
+  const winner = byId.get(winnerId);
+  const loser = byId.get(loserId);
+  if (!winner || !loser) throw new Error("Items missing");
+
+  // Critical path: only the two fighters (elo + their new positions).
+  // Remaining rank reshuffles go out fire-and-forget so rapid taps stay light.
+  await Promise.all([
+    supabase
+      .from("list_items")
+      .update({
+        elo: winner.elo,
+        position: winner.position,
+        updated_at: now,
+      })
+      .eq("id", winnerId),
+    supabase
+      .from("list_items")
+      .update({
+        elo: loser.elo,
+        position: loser.position,
+        updated_at: now,
+      })
+      .eq("id", loserId),
+  ]);
+
+  const cascade = outcome.items.filter((item) => {
+    if (item.id === winnerId || item.id === loserId) return false;
+    const prev = prevById.get(item.id);
+    if (!prev) return false;
+    return prev.position !== item.position;
+  });
+
+  if (cascade.length) {
+    void Promise.all(
+      cascade.map((item) =>
+        supabase
+          .from("list_items")
+          .update({
+            position: item.position,
+            updated_at: now,
+          })
+          .eq("id", item.id),
+      ),
+    );
+  }
+
+  void touchList(listId);
+  void supabase.from("battles").insert({
     list_id: listId,
     user_id: auth.userId,
     winner_item_id: winnerId,
     loser_item_id: loserId,
     is_draw: draw,
-    elo_winner_before: winner.elo,
-    elo_winner_after: next.winner,
-    elo_loser_before: loser.elo,
-    elo_loser_after: next.loser,
+    elo_winner_before: outcome.eloWinnerBefore,
+    elo_winner_after: outcome.winnerElo,
+    elo_loser_before: outcome.eloLoserBefore,
+    elo_loser_after: outcome.loserElo,
   });
+}
 
-  return { winnerElo: next.winner, loserElo: next.loser };
+export async function applyBattle(
+  listId: string,
+  winnerId: string,
+  loserId: string,
+  draw = false,
+  currentItems?: ListItem[],
+) {
+  const auth = await resolveAuth();
+  if (!auth.cloud || !auth.userId) {
+    const result = applyLocalBattle(listId, winnerId, loserId, draw);
+    return {
+      ...result,
+      items: getLocalItems(listId),
+    };
+  }
+
+  const items = currentItems ?? (await fetchListBundle(listId)).items;
+  const outcome = computeBattleOutcome(items, winnerId, loserId, draw);
+  await persistBattleOutcome(
+    listId,
+    winnerId,
+    loserId,
+    draw,
+    outcome,
+    items,
+  );
+  return {
+    winnerElo: outcome.winnerElo,
+    loserElo: outcome.loserElo,
+    items: outcome.items,
+  };
 }
 
 export async function seedLetterboxd(

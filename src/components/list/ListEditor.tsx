@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { MovieSearch, type SearchDestination } from "@/components/MovieSearch";
 import { Bench } from "@/components/list/Bench";
 import { RankList } from "@/components/list/RankList";
@@ -33,15 +33,50 @@ export function ListEditor({ listId }: { listId: string }) {
   const [message, setMessage] = useState<string | null>(null);
   const [shareOpen, setShareOpen] = useState(false);
   const [invitePath, setInvitePath] = useState<string | null>(null);
+  const itemsRef = useRef<ListItem[]>([]);
+  const persistChain = useRef(Promise.resolve());
+  const reorderFlush = useRef<{
+    previous: ListItem[];
+    next: ListItem[];
+    orderedIds: string[];
+  } | null>(null);
+  const reorderTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const applyItems = useCallback((next: ListItem[]) => {
+    itemsRef.current = next;
+    setItems(next);
+  }, []);
+
+  const queuePersist = useCallback(
+    (task: () => Promise<void>, failMessage: string) => {
+      persistChain.current = persistChain.current
+        .then(task)
+        .catch(async () => {
+          setMessage(failMessage);
+          const bundle = await fetchListBundle(listId);
+          setList(bundle.list);
+          applyItems(bundle.items);
+          setCloud(bundle.cloud);
+          setProfile(bundle.profile);
+        });
+    },
+    [applyItems, listId],
+  );
+
+  useEffect(() => {
+    return () => {
+      if (reorderTimer.current) clearTimeout(reorderTimer.current);
+    };
+  }, []);
 
   const refresh = useCallback(async () => {
     const bundle = await fetchListBundle(listId);
     setList(bundle.list);
-    setItems(bundle.items);
+    applyItems(bundle.items);
     setCloud(bundle.cloud);
     setProfile(bundle.profile);
     return bundle;
-  }, [listId]);
+  }, [applyItems, listId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -70,12 +105,13 @@ export function ListEditor({ listId }: { listId: string }) {
     destination: SearchDestination,
     source: ListItem["source"] = "manual",
   ) {
-    if (items.some((i) => i.tmdb_id === movie.id)) {
+    if (itemsRef.current.some((i) => i.tmdb_id === movie.id)) {
       setMessage("Already on this list");
       return;
     }
 
     const now = new Date().toISOString();
+    const ranked = itemsRef.current.filter((i) => i.position != null).length;
     const optimistic: ListItem = {
       id: crypto.randomUUID(),
       list_id: listId,
@@ -85,7 +121,7 @@ export function ListEditor({ listId }: { listId: string }) {
         ? Number.parseInt(movie.release_date.slice(0, 4), 10)
         : null,
       poster_path: movie.poster_path,
-      position: destination === "bench" ? null : rankedCount + 1,
+      position: destination === "bench" ? null : ranked + 1,
       elo: 1000,
       notes: null,
       source,
@@ -94,7 +130,7 @@ export function ListEditor({ listId }: { listId: string }) {
       updated_at: now,
     };
 
-    setItems((prev) => [...prev, optimistic]);
+    applyItems([...itemsRef.current, optimistic]);
     setMessage(
       destination === "bench"
         ? `${movie.title} sent to the bench`
@@ -112,17 +148,18 @@ export function ListEditor({ listId }: { listId: string }) {
         position: optimistic.position,
         source,
       });
-      setItems((prev) =>
-        prev.map((i) => (i.id === optimistic.id ? saved : i)),
+      applyItems(
+        itemsRef.current.map((i) => (i.id === optimistic.id ? saved : i)),
       );
     } catch (e) {
-      setItems((prev) => prev.filter((i) => i.id !== optimistic.id));
+      applyItems(itemsRef.current.filter((i) => i.id !== optimistic.id));
       setMessage(e instanceof Error ? e.message : "Could not add");
     }
   }
 
-  async function handleReorder(orderedIds: string[]) {
-    const byId = new Map(items.map((i) => [i.id, i]));
+  function handleReorder(orderedIds: string[]) {
+    const previous = itemsRef.current;
+    const byId = new Map(previous.map((i) => [i.id, i]));
     const ranked = orderedIds
       .map((id, index) => {
         const item = byId.get(id);
@@ -130,20 +167,36 @@ export function ListEditor({ listId }: { listId: string }) {
         return { ...item, position: index + 1 };
       })
       .filter(Boolean) as ListItem[];
-    const bench = items.filter((i) => !orderedIds.includes(i.id));
+    const bench = previous.filter((i) => !orderedIds.includes(i.id));
     const next = [...ranked, ...bench];
-    setItems(next);
-    try {
-      await reorderRanked(listId, orderedIds, next);
-    } catch (e) {
-      setMessage(e instanceof Error ? e.message : "Could not reorder");
-      await refresh();
-    }
+    applyItems(next);
+
+    // Coalesce rapid drags into one cloud write of the latest order
+    const baseline = reorderFlush.current?.previous ?? previous;
+    reorderFlush.current = { previous: baseline, next, orderedIds };
+    if (reorderTimer.current) clearTimeout(reorderTimer.current);
+    reorderTimer.current = setTimeout(() => {
+      const snap = reorderFlush.current;
+      reorderFlush.current = null;
+      reorderTimer.current = null;
+      if (!snap) return;
+      queuePersist(
+        () =>
+          reorderRanked(
+            listId,
+            snap.orderedIds,
+            snap.next,
+            snap.previous,
+          ),
+        "Could not reorder — reloading…",
+      );
+    }, 140);
   }
 
-  async function handleBenchFromRank(id: string) {
-    const item = items.find((i) => i.id === id);
-    const next = items.map((i) =>
+  function handleBenchFromRank(id: string) {
+    const previous = itemsRef.current;
+    const item = previous.find((i) => i.id === id);
+    const next = previous.map((i) =>
       i.id === id ? { ...i, position: null } : i,
     );
     const ranked = next
@@ -152,64 +205,65 @@ export function ListEditor({ listId }: { listId: string }) {
       .map((row, index) => ({ ...row, position: index + 1 }));
     const bench = next.filter((i) => i.position == null);
     const merged = [...ranked, ...bench];
-    setItems(merged);
+    applyItems(merged);
     if (item) setMessage(`${item.title} moved to the bench`);
-    try {
-      await moveToBench(listId, id, merged);
-    } catch (e) {
-      setMessage(e instanceof Error ? e.message : "Could not bench");
-      await refresh();
-    }
+    queuePersist(
+      () => moveToBench(listId, id, merged, previous),
+      "Could not bench — reloading…",
+    );
   }
 
-  async function handleRemove(id: string) {
-    const item = items.find((i) => i.id === id);
-    const filtered = items.filter((i) => i.id !== id);
+  function handleRemove(id: string) {
+    const previous = itemsRef.current;
+    const item = previous.find((i) => i.id === id);
+    const filtered = previous.filter((i) => i.id !== id);
     const ranked = filtered
       .filter((i) => i.position != null)
       .sort((a, b) => (a.position ?? 0) - (b.position ?? 0))
       .map((row, index) => ({ ...row, position: index + 1 }));
     const bench = filtered.filter((i) => i.position == null);
     const next = [...ranked, ...bench];
-    setItems(next);
+    applyItems(next);
     if (item) setMessage(`${item.title} removed`);
-    try {
-      await removeItem(listId, id, next);
-    } catch (e) {
-      setMessage(e instanceof Error ? e.message : "Could not remove");
-      await refresh();
-    }
+    queuePersist(
+      () => removeItem(listId, id, next, previous),
+      "Could not remove — reloading…",
+    );
   }
 
-  async function promote(id: string) {
-    const nextPos = rankedCount + 1;
-    setItems((prev) =>
-      prev.map((i) => (i.id === id ? { ...i, position: nextPos } : i)),
+  function promote(id: string) {
+    const previous = itemsRef.current;
+    const nextPos = previous.filter((i) => i.position != null).length + 1;
+    applyItems(
+      previous.map((i) => (i.id === id ? { ...i, position: nextPos } : i)),
     );
-    try {
-      await promoteItem(listId, id, nextPos);
-    } catch (e) {
-      setMessage(e instanceof Error ? e.message : "Could not rank");
-      await refresh();
-    }
+    queuePersist(
+      () => promoteItem(listId, id, nextPos),
+      "Could not rank — reloading…",
+    );
   }
 
   async function setVisibility(visibility: ListVisibility) {
-    await patchList(listId, { visibility });
-    if (visibility === "invite") {
-      const path = await ensureInviteLink(listId);
-      setInvitePath(path);
+    setList((prev) => (prev ? { ...prev, visibility } : prev));
+    try {
+      await patchList(listId, { visibility });
+      if (visibility === "invite") {
+        const path = await ensureInviteLink(listId);
+        setInvitePath(path);
+      }
+      setMessage(
+        visibility === "private"
+          ? "List is private"
+          : visibility === "invite"
+            ? "Invite-only — copy the invite link below"
+            : cloud
+              ? "Synced share link ready"
+              : "Share link ready",
+      );
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : "Could not update visibility");
+      await refresh();
     }
-    await refresh();
-    setMessage(
-      visibility === "private"
-        ? "List is private"
-        : visibility === "invite"
-          ? "Invite-only — copy the invite link below"
-          : cloud
-            ? "Synced share link ready"
-            : "Share link ready",
-    );
   }
 
   if (loading) {
@@ -333,16 +387,16 @@ export function ListEditor({ listId }: { listId: string }) {
 
       <RankList
         items={items}
-        onReorder={(ids) => void handleReorder(ids)}
-        onBench={(id) => void handleBenchFromRank(id)}
-        onRemove={(id) => void handleRemove(id)}
+        onReorder={handleReorder}
+        onBench={handleBenchFromRank}
+        onRemove={handleRemove}
       />
 
       <div className="mt-12">
         <Bench
           items={items}
-          onPromote={(id) => void promote(id)}
-          onRemove={(id) => void handleRemove(id)}
+          onPromote={promote}
+          onRemove={handleRemove}
         />
       </div>
 

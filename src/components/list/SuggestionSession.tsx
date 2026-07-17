@@ -76,8 +76,8 @@ export function SuggestionSession({
             Close matches from your list
           </h2>
           <p className="mt-2 max-w-lg text-sm text-bone/50">
-            Uses TMDB recommendations & similar titles based on what you’ve
-            already stacked{seeds.length ? ` (${seeds.length} seeds)` : ""}.
+            Close matches from your list, ranked toward better-reviewed titles
+            {seeds.length ? ` (${seeds.length} seeds)` : ""}.
           </p>
         </div>
         <button
