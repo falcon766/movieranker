@@ -1,20 +1,24 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { LogoutButton } from "@/components/LogoutButton";
 import { isSupabaseConfigured, isTmdbConfigured } from "@/lib/config";
 import {
   countLocalLists,
+  exportLocalBackup,
+  importBackupToCloud,
   restoreLocalListsToCloud,
+  type ListBackup,
 } from "@/lib/lists/store";
 
 export default function SettingsPage() {
-  const supabase = isSupabaseConfigured();
+  const supabaseConfigured = isSupabaseConfigured();
   const tmdb = isTmdbConfigured();
   const [localCount, setLocalCount] = useState(0);
   const [status, setStatus] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     setLocalCount(countLocalLists());
@@ -25,16 +29,53 @@ export default function SettingsPage() {
     setStatus(null);
     try {
       const imported = await restoreLocalListsToCloud();
-      setLocalCount(countLocalLists());
       setStatus(
         imported > 0
-          ? `Restored ${imported} list${imported === 1 ? "" : "s"} to your account. Open Lists to see them.`
+          ? `Restored ${imported} list${imported === 1 ? "" : "s"} to your account. Open Lists on any device.`
           : "No local lists found in this browser to restore.",
       );
     } catch (e) {
       setStatus(e instanceof Error ? e.message : "Restore failed");
     } finally {
       setBusy(false);
+    }
+  }
+
+  function downloadBackup() {
+    const backup = exportLocalBackup();
+    if (!backup.lists.length) {
+      setStatus("No local lists in this browser to export.");
+      return;
+    }
+    const blob = new Blob([JSON.stringify(backup, null, 2)], {
+      type: "application/json",
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `movieranker-backup-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    setStatus(
+      `Exported ${backup.lists.length} list${backup.lists.length === 1 ? "" : "s"}. AirDrop/email the file, then Import on the other device while signed in.`,
+    );
+  }
+
+  async function onImportFile(file: File) {
+    setBusy(true);
+    setStatus(null);
+    try {
+      const text = await file.text();
+      const backup = JSON.parse(text) as ListBackup;
+      const imported = await importBackupToCloud(backup);
+      setStatus(
+        `Imported ${imported} list${imported === 1 ? "" : "s"} into your account. Open Lists.`,
+      );
+    } catch (e) {
+      setStatus(e instanceof Error ? e.message : "Import failed");
+    } finally {
+      setBusy(false);
+      if (fileRef.current) fileRef.current.value = "";
     }
   }
 
@@ -53,25 +94,68 @@ export default function SettingsPage() {
         </section>
 
         <section>
-          <h2 className="display text-2xl text-bone">Restore local lists</h2>
+          <h2 className="display text-2xl text-bone">
+            Move a list between devices
+          </h2>
           <p className="mt-2 text-sm">
-            If cloud sync was empty after the RLS fix, lists may still be in
-            this browser. This copies them into your signed-in account.
+            Older lists live in the browser that created them. The web cannot see
+            your phone’s storage until you push them up.
           </p>
-          <p className="mt-2 text-xs text-bone/40">
-            Local lists found here: {localCount}
+          <ol className="mt-3 list-decimal space-y-2 pl-5 text-sm">
+            <li>
+              On <strong className="text-bone">phone</strong> (where the list
+              is): sign in with Google → Settings
+            </li>
+            <li>
+              Tap <strong className="text-bone">Restore to cloud</strong>{" "}
+              <em>or</em> <strong className="text-bone">Export backup</strong>
+            </li>
+            <li>
+              On web: refresh Lists — or Import the backup file while signed in
+            </li>
+          </ol>
+
+          <p className="mt-4 text-xs text-bone/40">
+            Local lists found in <em>this</em> browser: {localCount}
           </p>
-          <button
-            type="button"
-            className="btn btn-primary mt-4"
-            disabled={busy || localCount === 0}
-            onClick={() => void restore()}
-          >
-            {busy ? "Restoring…" : "Restore to cloud"}
-          </button>
-          {status && (
-            <p className="mt-3 text-sm text-amber">{status}</p>
-          )}
+
+          <div className="mt-4 flex flex-wrap gap-2">
+            <button
+              type="button"
+              className="btn btn-primary"
+              disabled={busy || localCount === 0}
+              onClick={() => void restore()}
+            >
+              {busy ? "Working…" : "Restore to cloud"}
+            </button>
+            <button
+              type="button"
+              className="btn btn-ghost"
+              disabled={localCount === 0}
+              onClick={downloadBackup}
+            >
+              Export backup
+            </button>
+            <button
+              type="button"
+              className="btn btn-ghost"
+              disabled={busy}
+              onClick={() => fileRef.current?.click()}
+            >
+              Import backup
+            </button>
+            <input
+              ref={fileRef}
+              type="file"
+              accept="application/json,.json"
+              className="hidden"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) void onImportFile(file);
+              }}
+            />
+          </div>
+          {status && <p className="mt-3 text-sm text-amber">{status}</p>}
         </section>
 
         <section>
@@ -85,30 +169,11 @@ export default function SettingsPage() {
             </li>
             <li>
               Supabase:{" "}
-              <span className={supabase ? "text-sage" : "text-ember"}>
-                {supabase ? "Connected" : "Missing keys"}
+              <span className={supabaseConfigured ? "text-sage" : "text-ember"}>
+                {supabaseConfigured ? "Connected" : "Missing keys"}
               </span>
             </li>
           </ul>
-        </section>
-
-        <section>
-          <h2 className="display text-2xl text-bone">Google sign-in</h2>
-          <p className="mt-2 text-sm">
-            Enable Google in Supabase (Authentication → Providers → Google) and
-            add your Google Cloud OAuth Client ID + Secret. Authorized redirect
-            URI must be:
-          </p>
-          <code className="mt-2 block break-all rounded-xl bg-black/30 px-3 py-2 text-xs text-amber">
-            https://ujfuywajcxpkfvemiast.supabase.co/auth/v1/callback
-          </code>
-        </section>
-
-        <section>
-          <h2 className="display text-2xl text-bone">Lists storage</h2>
-          <p className="mt-2 text-sm">
-            When you&apos;re signed in, lists sync to Supabase across devices.
-          </p>
         </section>
 
         <Link href="/app" className="btn btn-primary">

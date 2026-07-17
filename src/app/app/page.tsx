@@ -21,15 +21,11 @@ export default function DashboardPage() {
       setLists(result.lists);
       setCloud(result.cloud);
       setLocalListCount(result.localListCount);
-      if (result.cloud && result.lists.length && result.localListCount) {
-        setNotice(null);
-      } else if (
-        result.cloud &&
-        !result.lists.length &&
-        result.localListCount > 0
-      ) {
+      if (result.cloud && result.localListCount > 0) {
         setNotice(
-          "Cloud is empty, but this browser still has local lists. Open Settings → Restore to cloud.",
+          result.lists.length
+            ? `This browser still has ${result.localListCount} local list(s) not fully synced. On this device open Settings → Restore to cloud.`
+            : "Cloud is empty, but this browser still has local lists. Open Settings → Restore to cloud.",
         );
       } else {
         setNotice(null);

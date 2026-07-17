@@ -321,6 +321,112 @@ export async function restoreLocalListsToCloud() {
   return migrateLocalListsToCloud(auth.userId, { force: true });
 }
 
+export type ListBackup = {
+  version: 1;
+  exportedAt: string;
+  lists: Array<{
+    list: Omit<MovieList, "id" | "owner_id" | "created_at" | "updated_at"> & {
+      title: string;
+      slug: string;
+    };
+    items: Array<{
+      tmdb_id: number;
+      title: string;
+      year: number | null;
+      poster_path: string | null;
+      position: number | null;
+      elo: number;
+      notes: string | null;
+      source: ListItem["source"];
+      locked: boolean;
+    }>;
+  }>;
+};
+
+/** Downloadable backup of this browser’s local lists (works offline / cross-device). */
+export function exportLocalBackup(): ListBackup {
+  const lists = getLocalLists();
+  return {
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    lists: lists.map((list) => ({
+      list: {
+        title: list.title,
+        slug: list.slug,
+        description: list.description,
+        target_size: list.target_size,
+        visibility: list.visibility,
+        allow_overflow: list.allow_overflow,
+      },
+      items: getLocalItems(list.id).map((i) => ({
+        tmdb_id: i.tmdb_id,
+        title: i.title,
+        year: i.year,
+        poster_path: i.poster_path,
+        position: i.position,
+        elo: i.elo,
+        notes: i.notes,
+        source: i.source,
+        locked: i.locked,
+      })),
+    })),
+  };
+}
+
+/** Import a backup JSON into the signed-in cloud account. */
+export async function importBackupToCloud(backup: ListBackup): Promise<number> {
+  const auth = await resolveAuth();
+  if (!auth.cloud || !auth.userId) {
+    throw new Error("Sign in first, then import the backup");
+  }
+  if (!backup?.lists?.length) {
+    throw new Error("Backup has no lists");
+  }
+
+  const supabase = createClient();
+  let imported = 0;
+
+  for (const entry of backup.lists) {
+    const { data: created, error } = await supabase
+      .from("lists")
+      .insert({
+        owner_id: auth.userId,
+        title: entry.list.title,
+        slug: `${slugify(entry.list.title)}-${nanoid(4)}`.slice(0, 48),
+        description: entry.list.description ?? null,
+        target_size: entry.list.target_size || 25,
+        visibility: entry.list.visibility || "unlisted",
+        allow_overflow: entry.list.allow_overflow ?? true,
+      })
+      .select("*")
+      .single();
+    if (error || !created) {
+      throw new Error(error?.message || `Failed to import ${entry.list.title}`);
+    }
+
+    if (entry.items?.length) {
+      const { error: itemsError } = await supabase.from("list_items").insert(
+        entry.items.map((i) => ({
+          list_id: created.id,
+          tmdb_id: i.tmdb_id,
+          title: i.title,
+          year: i.year,
+          poster_path: i.poster_path,
+          position: i.position,
+          elo: i.elo ?? 1000,
+          notes: i.notes,
+          source: i.source || "manual",
+          locked: i.locked ?? false,
+        })),
+      );
+      if (itemsError) throw new Error(itemsError.message);
+    }
+    imported += 1;
+  }
+
+  return imported;
+}
+
 export async function fetchListBundle(listId: string): Promise<{
   list: MovieList | null;
   items: ListItem[];
