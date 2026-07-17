@@ -178,7 +178,7 @@ export async function fetchLists(): Promise<{
     .select("*")
     .eq("owner_id", auth.userId)
     .order("updated_at", { ascending: false });
-  if (error) throw error;
+  if (error) throw new Error(error.message);
   return {
     lists: (data ?? []).map((row) => mapList(row as Record<string, unknown>)),
     cloud: true,

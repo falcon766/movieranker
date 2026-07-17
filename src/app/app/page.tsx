@@ -19,7 +19,13 @@ export default function DashboardPage() {
       setLists(result.lists);
       setCloud(result.cloud);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to load lists");
+      const msg =
+        e instanceof Error
+          ? e.message
+          : typeof e === "object" && e && "message" in e
+            ? String((e as { message: unknown }).message)
+            : "Failed to load lists";
+      setError(msg);
     } finally {
       setLoading(false);
     }
