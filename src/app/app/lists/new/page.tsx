@@ -2,7 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useState } from "react";
-import { createLocalList } from "@/lib/local-store";
+import { createList } from "@/lib/lists/store";
 
 const PRESETS = [25, 50, 75, 100];
 
@@ -12,18 +12,27 @@ export default function NewListPage() {
   const [target, setTarget] = useState(25);
   const [custom, setCustom] = useState("");
   const [description, setDescription] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
 
-  function onSubmit(e: React.FormEvent) {
+  async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     const size = custom ? Number.parseInt(custom, 10) : target;
     if (!Number.isFinite(size) || size < 1 || size > 250) return;
-    const list = createLocalList({
-      title: title.trim() || "Untitled list",
-      target_size: size,
-      description: description.trim() || undefined,
-      visibility: "unlisted",
-    });
-    router.push(`/app/lists/${list.id}`);
+    setBusy(true);
+    setError(null);
+    try {
+      const list = await createList({
+        title: title.trim() || "Untitled list",
+        target_size: size,
+        description: description.trim() || undefined,
+        visibility: "unlisted",
+      });
+      router.push(`/app/lists/${list.id}`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not create list");
+      setBusy(false);
+    }
   }
 
   return (
@@ -34,7 +43,7 @@ export default function NewListPage() {
         Best of all time, favorites, comfort canon — your call.
       </p>
 
-      <form onSubmit={onSubmit} className="mt-8 space-y-5">
+      <form onSubmit={(e) => void onSubmit(e)} className="mt-8 space-y-5">
         <div>
           <label className="mb-2 block text-sm text-bone/50">Title</label>
           <input
@@ -46,9 +55,7 @@ export default function NewListPage() {
           />
         </div>
         <div>
-          <label className="mb-2 block text-sm text-bone/50">
-            Target size
-          </label>
+          <label className="mb-2 block text-sm text-bone/50">Target size</label>
           <div className="flex flex-wrap gap-2">
             {PRESETS.map((n) => (
               <button
@@ -87,8 +94,9 @@ export default function NewListPage() {
             placeholder="The films I’d defend at dinner."
           />
         </div>
-        <button type="submit" className="btn btn-primary w-full">
-          Create list
+        {error && <p className="text-sm text-ember">{error}</p>}
+        <button type="submit" className="btn btn-primary w-full" disabled={busy}>
+          {busy ? "Creating…" : "Create list"}
         </button>
       </form>
     </main>

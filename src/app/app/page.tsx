@@ -2,14 +2,31 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { deleteLocalList, getLocalLists } from "@/lib/local-store";
+import { fetchLists, removeList } from "@/lib/lists/store";
 import type { MovieList } from "@/types/database";
 
 export default function DashboardPage() {
   const [lists, setLists] = useState<MovieList[]>([]);
+  const [cloud, setCloud] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  async function load() {
+    setLoading(true);
+    setError(null);
+    try {
+      const result = await fetchLists();
+      setLists(result.lists);
+      setCloud(result.cloud);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to load lists");
+    } finally {
+      setLoading(false);
+    }
+  }
 
   useEffect(() => {
-    setLists(getLocalLists());
+    void load();
   }, []);
 
   return (
@@ -18,13 +35,26 @@ export default function DashboardPage() {
         <div>
           <p className="eyebrow">Your canons</p>
           <h1 className="display mt-2 text-4xl sm:text-5xl">Lists</h1>
+          <p className="mt-2 text-sm text-bone/40">
+            {cloud
+              ? "Synced to your account — same lists on every device."
+              : "Local to this browser. Sign in to sync across devices."}
+          </p>
         </div>
         <Link href="/app/lists/new" className="btn btn-primary">
           New list
         </Link>
       </div>
 
-      {!lists.length ? (
+      {error && (
+        <p className="mt-6 rounded-2xl border border-ember/30 bg-ember/10 px-4 py-3 text-sm text-ember">
+          {error}
+        </p>
+      )}
+
+      {loading ? (
+        <p className="mt-12 text-center text-bone/40">Loading lists…</p>
+      ) : !lists.length ? (
         <div className="glass mt-12 rounded-[2rem] px-6 py-16 text-center">
           <h2 className="display text-3xl">No lists yet</h2>
           <p className="mx-auto mt-3 max-w-md text-bone/50">
@@ -37,7 +67,10 @@ export default function DashboardPage() {
       ) : (
         <ul className="mt-10 grid gap-4 sm:grid-cols-2">
           {lists.map((list) => (
-            <li key={list.id} className="glass group rounded-3xl p-5 transition hover:border-amber/30">
+            <li
+              key={list.id}
+              className="glass group rounded-3xl p-5 transition hover:border-amber/30"
+            >
               <Link href={`/app/lists/${list.id}`} className="block">
                 <div className="flex items-start justify-between gap-3">
                   <div>
@@ -58,8 +91,7 @@ export default function DashboardPage() {
                 className="mt-4 text-xs text-bone/30 hover:text-ember"
                 onClick={() => {
                   if (confirm("Delete this list?")) {
-                    deleteLocalList(list.id);
-                    setLists(getLocalLists());
+                    void removeList(list.id).then(() => load());
                   }
                 }}
               >

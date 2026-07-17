@@ -63,8 +63,10 @@ export default function SettingsPage() {
         <section>
           <h2 className="display text-2xl text-bone">Lists storage</h2>
           <p className="mt-2 text-sm">
-            Rankings still save in this browser until we wire cloud sync to your
-            Supabase tables. Auth already uses Supabase.
+            When you&apos;re signed in, lists sync to Supabase across devices.
+            The first time you sign in on a device that already had local lists
+            (and your cloud account is empty), those local lists are imported
+            once automatically.
           </p>
         </section>
 

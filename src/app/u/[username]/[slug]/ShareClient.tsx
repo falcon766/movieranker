@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useParams, useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import { Poster } from "@/components/ui/Poster";
+import { fetchSharedList } from "@/lib/lists/store";
 import { getLocalItems, getLocalList } from "@/lib/local-store";
 import type { ListItem, MovieList } from "@/types/database";
 
@@ -13,24 +14,46 @@ export function ShareClient() {
   const localId = search.get("local");
   const [list, setList] = useState<MovieList | null>(null);
   const [items, setItems] = useState<ListItem[]>([]);
+  const [ownerName, setOwnerName] = useState(params.username);
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
-    if (!localId) {
-      setReady(true);
-      return;
-    }
-    const l = getLocalList(localId);
-    if (l && l.visibility !== "private" && l.visibility !== "invite") {
-      setList(l);
-      setItems(
-        getLocalItems(localId)
-          .filter((i) => i.position != null)
-          .sort((a, b) => (a.position ?? 0) - (b.position ?? 0)),
-      );
-    }
-    setReady(true);
-  }, [localId]);
+    let cancelled = false;
+    (async () => {
+      if (localId) {
+        const l = getLocalList(localId);
+        if (l && l.visibility !== "private" && l.visibility !== "invite") {
+          if (!cancelled) {
+            setList(l);
+            setItems(
+              getLocalItems(localId)
+                .filter((i) => i.position != null)
+                .sort((a, b) => (a.position ?? 0) - (b.position ?? 0)),
+            );
+            setOwnerName(params.username);
+          }
+        }
+        if (!cancelled) setReady(true);
+        return;
+      }
+
+      try {
+        const shared = await fetchSharedList(params.username, params.slug);
+        if (!cancelled) {
+          setList(shared.list);
+          setItems(shared.items);
+          setOwnerName(shared.ownerName);
+        }
+      } catch {
+        if (!cancelled) setList(null);
+      } finally {
+        if (!cancelled) setReady(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [localId, params.username, params.slug]);
 
   if (!ready) {
     return (
@@ -40,12 +63,12 @@ export function ShareClient() {
     );
   }
 
-  if (!localId) {
+  if (!list) {
     return (
       <main className="relative z-[1] mx-auto max-w-lg px-4 py-20 text-center">
-        <h1 className="display text-3xl">Connect Supabase for cloud shares</h1>
+        <h1 className="display text-3xl">List unavailable</h1>
         <p className="mt-3 text-bone/50">
-          Local demo shares use a <code>?local=</code> list id.
+          Private, invite-only, or not found.
         </p>
         <Link href="/app" className="btn btn-primary mt-8">
           Open app
@@ -54,21 +77,10 @@ export function ShareClient() {
     );
   }
 
-  if (!list) {
-    return (
-      <main className="relative z-[1] mx-auto max-w-lg px-4 py-20 text-center">
-        <h1 className="display text-3xl">List unavailable</h1>
-        <p className="mt-3 text-bone/50">
-          Private, invite-only, or missing in this browser.
-        </p>
-      </main>
-    );
-  }
-
   return (
     <main className="relative z-[1] mx-auto max-w-3xl px-4 py-12">
       <p className="eyebrow">
-        {params.username}&apos;s list · Top {list.target_size}
+        {ownerName}&apos;s list · Top {list.target_size}
       </p>
       <h1 className="display mt-3 text-5xl">{list.title}</h1>
       {list.description && (

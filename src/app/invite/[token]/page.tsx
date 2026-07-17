@@ -4,32 +4,47 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import { Poster } from "@/components/ui/Poster";
-import { getLocalItems, getLocalList } from "@/lib/local-store";
+import { fetchInviteList } from "@/lib/lists/store";
 import type { ListItem, MovieList } from "@/types/database";
 
 export default function InvitePage() {
   const params = useParams<{ token: string }>();
   const [list, setList] = useState<MovieList | null>(null);
   const [items, setItems] = useState<ListItem[]>([]);
+  const [ready, setReady] = useState(false);
 
   useEffect(() => {
-    const l = getLocalList(params.token);
-    if (!l || l.visibility !== "invite") return;
-    setList(l);
-    setItems(
-      getLocalItems(params.token)
-        .filter((i) => i.position != null)
-        .sort((a, b) => (a.position ?? 0) - (b.position ?? 0)),
-    );
+    let cancelled = false;
+    (async () => {
+      try {
+        const result = await fetchInviteList(params.token);
+        if (!cancelled) {
+          setList(result.list);
+          setItems(result.items);
+        }
+      } finally {
+        if (!cancelled) setReady(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [params.token]);
+
+  if (!ready) {
+    return (
+      <main className="relative z-[1] mx-auto max-w-lg px-4 py-20 text-center text-bone/40">
+        Loading invite…
+      </main>
+    );
+  }
 
   if (!list) {
     return (
       <main className="relative z-[1] mx-auto max-w-lg px-4 py-20 text-center">
         <h1 className="display text-3xl">Invite invalid</h1>
         <p className="mt-3 text-bone/50">
-          This invite may be revoked, or the list isn’t invite-only in this
-          browser.
+          This invite may be revoked, expired, or incorrect.
         </p>
         <Link href="/" className="btn btn-ghost mt-8">
           Home

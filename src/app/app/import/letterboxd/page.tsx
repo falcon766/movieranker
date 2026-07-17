@@ -3,13 +3,8 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { parseLetterboxdCsv, topByRating } from "@/lib/letterboxd";
-import {
-  addLocalMovie,
-  getLocalLists,
-  seedFromLetterboxdLocal,
-} from "@/lib/local-store";
+import { fetchLists, seedLetterboxd } from "@/lib/lists/store";
 import type { LetterboxdRow, MovieList, TmdbMovie } from "@/types/database";
-import { eloFromLetterboxdStars } from "@/lib/elo";
 
 type Mode = "bench" | "prefill" | "both";
 
@@ -22,9 +17,10 @@ export default function LetterboxdImportPage() {
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    const all = getLocalLists();
-    setLists(all);
-    if (all[0]) setListId(all[0].id);
+    void fetchLists().then((result) => {
+      setLists(result.lists);
+      if (result.lists[0]) setListId(result.lists[0].id);
+    });
   }, []);
 
   async function onFile(file: File) {
@@ -35,14 +31,13 @@ export default function LetterboxdImportPage() {
   }
 
   async function searchTmdb(name: string, year: number | null) {
-    const q = year ? `${name}` : name;
-    const res = await fetch(`/api/tmdb/search?q=${encodeURIComponent(q)}`);
+    const res = await fetch(`/api/tmdb/search?q=${encodeURIComponent(name)}`);
     const data = (await res.json()) as { results: TmdbMovie[] };
     const results = data.results ?? [];
     if (!results.length) return null;
     if (year) {
-      const exact = results.find(
-        (r) => r.release_date?.startsWith(String(year)),
+      const exact = results.find((r) =>
+        r.release_date?.startsWith(String(year)),
       );
       if (exact) return exact;
     }
@@ -78,30 +73,8 @@ export default function LetterboxdImportPage() {
         });
       }
 
-      if (mode === "bench") {
-        for (const m of matched) {
-          try {
-            addLocalMovie(listId, {
-              tmdb_id: m.tmdb_id,
-              title: m.title,
-              year: m.year,
-              poster_path: m.poster_path,
-              source: "letterboxd",
-              elo:
-                m.rating != null ? eloFromLetterboxdStars(m.rating) : 1000,
-              asBench: true,
-            });
-          } catch {
-            /* dup */
-          }
-        }
-      } else {
-        seedFromLetterboxdLocal(listId, matched, mode);
-      }
-
-      setStatus(
-        `Matched ${matched.length} films into your list (${mode}).`,
-      );
+      await seedLetterboxd(listId, matched, mode);
+      setStatus(`Matched ${matched.length} films into your list (${mode}).`);
     } catch (e) {
       setStatus(e instanceof Error ? e.message : "Import failed");
     } finally {

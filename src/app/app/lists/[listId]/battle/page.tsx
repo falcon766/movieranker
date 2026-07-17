@@ -4,18 +4,13 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { BattleArena } from "@/components/battle/BattleArena";
-import {
-  applyLocalBattle,
-  getLocalItems,
-  getLocalList,
-} from "@/lib/local-store";
+import { applyBattle, fetchListBundle } from "@/lib/lists/store";
 import type { ListItem, MovieList } from "@/types/database";
 
 function pickPair(items: ListItem[]): [ListItem, ListItem] | null {
-  const pool = items.filter((i) => i.position != null || true);
+  const pool = items;
   if (pool.length < 2) return null;
 
-  // Prefer adjacent ranks when possible
   const ranked = [...items]
     .filter((i) => i.position != null)
     .sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
@@ -46,17 +41,28 @@ export default function BattlePage() {
   const [pair, setPair] = useState<[ListItem, ListItem] | null>(null);
   const [round, setRound] = useState(1);
   const [flash, setFlash] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
 
-  const refresh = useCallback(() => {
-    setList(getLocalList(listId));
-    const nextItems = getLocalItems(listId);
-    setItems(nextItems);
-    return nextItems;
+  const refresh = useCallback(async () => {
+    const bundle = await fetchListBundle(listId);
+    setList(bundle.list);
+    setItems(bundle.items);
+    return bundle.items;
   }, [listId]);
 
   useEffect(() => {
-    const next = refresh();
-    setPair(pickPair(next));
+    let cancelled = false;
+    (async () => {
+      setLoading(true);
+      const next = await refresh();
+      if (!cancelled) {
+        setPair(pickPair(next));
+        setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [refresh]);
 
   const canBattle = useMemo(() => items.length >= 2, [items.length]);
@@ -66,21 +72,29 @@ export default function BattlePage() {
     setPair(pickPair(updated));
   }
 
-  function onPick(winnerId: string, loserId: string) {
-    const result = applyLocalBattle(listId, winnerId, loserId, false);
-    const updated = refresh();
+  async function onPick(winnerId: string, loserId: string) {
+    const result = await applyBattle(listId, winnerId, loserId, false);
+    const updated = await refresh();
     setFlash(
       `Elo → winner ${Math.round(result.winnerElo)} · loser ${Math.round(result.loserElo)}`,
     );
     nextRound(updated);
   }
 
-  function onDraw() {
+  async function onDraw() {
     if (!pair) return;
-    applyLocalBattle(listId, pair[0].id, pair[1].id, true);
-    const updated = refresh();
+    await applyBattle(listId, pair[0].id, pair[1].id, true);
+    const updated = await refresh();
     setFlash("Draw — small Elo nudge");
     nextRound(updated);
+  }
+
+  if (loading) {
+    return (
+      <main className="mx-auto max-w-lg px-4 py-20 text-center text-bone/40">
+        Loading battle…
+      </main>
+    );
   }
 
   if (!list) {
@@ -126,8 +140,8 @@ export default function BattlePage() {
           <BattleArena
             left={pair[0]}
             right={pair[1]}
-            onPick={onPick}
-            onDraw={onDraw}
+            onPick={(w, l) => void onPick(w, l)}
+            onDraw={() => void onDraw()}
             round={round}
           />
         </>
