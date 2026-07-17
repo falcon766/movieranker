@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { MovieSearch, type SearchDestination } from "@/components/MovieSearch";
 import { Bench } from "@/components/list/Bench";
 import { RankList } from "@/components/list/RankList";
+import { SuggestionSession } from "@/components/list/SuggestionSession";
 import {
   addLocalMovie,
   getLocalItems,
@@ -34,7 +35,11 @@ export function ListEditor({ listId }: { listId: string }) {
   const excludeIds = useMemo(() => items.map((i) => i.tmdb_id), [items]);
   const rankedCount = items.filter((i) => i.position != null).length;
 
-  async function handleSelect(movie: TmdbMovie, destination: SearchDestination) {
+  async function handleSelect(
+    movie: TmdbMovie,
+    destination: SearchDestination,
+    source: ListItem["source"] = "manual",
+  ) {
     try {
       addLocalMovie(listId, {
         tmdb_id: movie.id,
@@ -44,6 +49,7 @@ export function ListEditor({ listId }: { listId: string }) {
           : null,
         poster_path: movie.poster_path,
         asBench: destination === "bench",
+        source,
       });
       refresh();
       setMessage(
@@ -189,6 +195,15 @@ export function ListEditor({ listId }: { listId: string }) {
 
       <div className="mb-8">
         <MovieSearch excludeIds={excludeIds} onSelect={handleSelect} />
+      </div>
+
+      <div className="mb-10">
+        <SuggestionSession
+          items={items}
+          onPick={(movie, destination) =>
+            handleSelect(movie, destination, "suggestion")
+          }
+        />
       </div>
 
       <RankList

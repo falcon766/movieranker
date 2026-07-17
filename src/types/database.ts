@@ -62,6 +62,11 @@ export type TmdbMovie = {
   vote_average?: number;
 };
 
+export type SuggestedMovie = TmdbMovie & {
+  score: number;
+  because: string[];
+};
+
 export type LetterboxdRow = {
   name: string;
   year: number | null;
