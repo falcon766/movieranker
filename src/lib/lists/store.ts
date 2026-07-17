@@ -67,18 +67,38 @@ function mapList(row: Record<string, unknown>): MovieList {
   };
 }
 
+let authCache: { at: number; value: AuthContext } | null = null;
+const AUTH_CACHE_MS = 30_000;
+
+export function invalidateAuthCache() {
+  authCache = null;
+}
+
 export async function resolveAuth(): Promise<AuthContext> {
   if (!isSupabaseConfigured()) {
     return { cloud: false, userId: null, profile: null };
+  }
+  if (authCache && Date.now() - authCache.at < AUTH_CACHE_MS) {
+    return authCache.value;
   }
   try {
     const supabase = createClient();
     const {
       data: { user },
     } = await supabase.auth.getUser();
-    if (!user) return { cloud: false, userId: null, profile: null };
+    if (!user) {
+      authCache = {
+        at: Date.now(),
+        value: { cloud: false, userId: null, profile: null },
+      };
+      return authCache.value;
+    }
     const profile = await ensureProfile(user.id, user.email ?? undefined);
-    return { cloud: true, userId: user.id, profile };
+    authCache = {
+      at: Date.now(),
+      value: { cloud: true, userId: user.id, profile },
+    };
+    return authCache.value;
   } catch {
     return { cloud: false, userId: null, profile: null };
   }
@@ -580,6 +600,29 @@ function requireCloud(auth: AuthContext): asserts auth is AuthContext & {
   }
 }
 
+async function touchList(listId: string) {
+  const supabase = createClient();
+  await supabase
+    .from("lists")
+    .update({ updated_at: new Date().toISOString() })
+    .eq("id", listId);
+}
+
+/** Sync positions for ranked rows only (single-field updates in parallel). */
+async function syncPositions(items: ListItem[]) {
+  const supabase = createClient();
+  const ranked = items.filter((i) => i.position != null);
+  if (!ranked.length) return;
+  await Promise.all(
+    ranked.map((i) =>
+      supabase
+        .from("list_items")
+        .update({ position: i.position, updated_at: new Date().toISOString() })
+        .eq("id", i.id),
+    ),
+  );
+}
+
 export async function addMovie(
   listId: string,
   movie: {
@@ -590,6 +633,10 @@ export async function addMovie(
     source?: ListItem["source"];
     elo?: number;
     asBench?: boolean;
+    /** Optimistic client id — avoids a second round-trip remap */
+    id?: string;
+    /** Optimistic position when caller already knows ranked count */
+    position?: number | null;
   },
 ) {
   const auth = await resolveAuth();
@@ -598,20 +645,35 @@ export async function addMovie(
     return addLocalMovie(listId, movie);
   }
 
-  const { items } = await fetchListBundle(listId);
-  if (items.some((i) => i.tmdb_id === movie.tmdb_id)) {
-    throw new Error("Already on this list");
-  }
-  const ranked = items.filter((i) => i.position != null);
+  const supabase = createClient();
   const now = new Date().toISOString();
-  const item: ListItem = {
-    id: crypto.randomUUID(),
+  const id = movie.id ?? crypto.randomUUID();
+
+  let position: number | null;
+  if (movie.asBench) {
+    position = null;
+  } else if (movie.position !== undefined) {
+    position = movie.position;
+  } else {
+    const { data: top } = await supabase
+      .from("list_items")
+      .select("position")
+      .eq("list_id", listId)
+      .not("position", "is", null)
+      .order("position", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    position = Number(top?.position ?? 0) + 1;
+  }
+
+  const row = {
+    id,
     list_id: listId,
     tmdb_id: movie.tmdb_id,
     title: movie.title,
     year: movie.year,
     poster_path: movie.poster_path,
-    position: movie.asBench ? null : ranked.length + 1,
+    position,
     elo: movie.elo ?? 1000,
     notes: null,
     source: movie.source ?? "manual",
@@ -619,14 +681,35 @@ export async function addMovie(
     created_at: now,
     updated_at: now,
   };
-  await persistCloudItems(listId, [...items, item]);
-  return item;
+
+  const { data, error } = await supabase
+    .from("list_items")
+    .insert(row)
+    .select("*")
+    .single();
+
+  if (error) {
+    if (error.code === "23505") throw new Error("Already on this list");
+    throw new Error(error.message);
+  }
+
+  void touchList(listId);
+  return mapItem(data as Record<string, unknown>);
 }
 
-export async function reorderRanked(listId: string, orderedIds: string[]) {
+export async function reorderRanked(
+  listId: string,
+  orderedIds: string[],
+  nextItems?: ListItem[],
+) {
   const auth = await resolveAuth();
   if (!auth.cloud) {
     reorderLocalRanked(listId, orderedIds);
+    return;
+  }
+  if (nextItems) {
+    await syncPositions(nextItems);
+    void touchList(listId);
     return;
   }
   const { items } = await fetchListBundle(listId);
@@ -642,27 +725,31 @@ export async function reorderRanked(listId: string, orderedIds: string[]) {
   await persistCloudItems(listId, [...ranked, ...bench]);
 }
 
-export async function moveToBench(listId: string, itemId: string) {
+export async function moveToBench(
+  listId: string,
+  itemId: string,
+  nextItems?: ListItem[],
+) {
   const auth = await resolveAuth();
   if (!auth.cloud) {
     moveLocalToBench(listId, itemId);
     return;
   }
-  const { items } = await fetchListBundle(listId);
-  const next = items.map((i) =>
-    i.id === itemId
-      ? { ...i, position: null, updated_at: new Date().toISOString() }
-      : i,
-  );
-  const ranked = next
-    .filter((i) => i.position != null)
-    .sort((a, b) => (a.position ?? 0) - (b.position ?? 0))
-    .map((item, index) => ({ ...item, position: index + 1 }));
-  const bench = next.filter((i) => i.position == null);
-  await persistCloudItems(listId, [...ranked, ...bench]);
+  const supabase = createClient();
+  const { error } = await supabase
+    .from("list_items")
+    .update({ position: null, updated_at: new Date().toISOString() })
+    .eq("id", itemId);
+  if (error) throw new Error(error.message);
+  if (nextItems) await syncPositions(nextItems);
+  void touchList(listId);
 }
 
-export async function removeItem(listId: string, itemId: string) {
+export async function removeItem(
+  listId: string,
+  itemId: string,
+  nextItems?: ListItem[],
+) {
   const auth = await resolveAuth();
   if (!auth.cloud) {
     const items = getLocalItems(listId).filter((i) => i.id !== itemId);
@@ -674,17 +761,18 @@ export async function removeItem(listId: string, itemId: string) {
     saveLocalItems(listId, [...ranked, ...bench]);
     return;
   }
-  const { items } = await fetchListBundle(listId);
-  const next = items.filter((i) => i.id !== itemId);
-  const ranked = next
-    .filter((i) => i.position != null)
-    .sort((a, b) => (a.position ?? 0) - (b.position ?? 0))
-    .map((row, index) => ({ ...row, position: index + 1 }));
-  const bench = next.filter((i) => i.position == null);
-  await persistCloudItems(listId, [...ranked, ...bench]);
+  const supabase = createClient();
+  const { error } = await supabase.from("list_items").delete().eq("id", itemId);
+  if (error) throw new Error(error.message);
+  if (nextItems) await syncPositions(nextItems);
+  void touchList(listId);
 }
 
-export async function promoteItem(listId: string, itemId: string) {
+export async function promoteItem(
+  listId: string,
+  itemId: string,
+  nextPosition?: number,
+) {
   const auth = await resolveAuth();
   if (!auth.cloud) {
     const items = getLocalItems(listId);
@@ -699,16 +787,25 @@ export async function promoteItem(listId: string, itemId: string) {
     saveLocalItems(listId, next);
     return;
   }
-  const { items } = await fetchListBundle(listId);
-  const next = items.map((i) =>
-    i.id === itemId
-      ? {
-          ...i,
-          position: items.filter((x) => x.position != null).length + 1,
-        }
-      : i,
-  );
-  await persistCloudItems(listId, next);
+  const supabase = createClient();
+  let position = nextPosition;
+  if (position == null) {
+    const { data: top } = await supabase
+      .from("list_items")
+      .select("position")
+      .eq("list_id", listId)
+      .not("position", "is", null)
+      .order("position", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    position = Number(top?.position ?? 0) + 1;
+  }
+  const { error } = await supabase
+    .from("list_items")
+    .update({ position, updated_at: new Date().toISOString() })
+    .eq("id", itemId);
+  if (error) throw new Error(error.message);
+  void touchList(listId);
 }
 
 export async function applyBattle(

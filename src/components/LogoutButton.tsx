@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { isSupabaseConfigured } from "@/lib/config";
+import { invalidateAuthCache } from "@/lib/lists/store";
 import { createClient } from "@/lib/supabase/client";
 
 export function LogoutButton({
@@ -21,6 +22,7 @@ export function LogoutButton({
       if (isSupabaseConfigured()) {
         const supabase = createClient();
         await supabase.auth.signOut();
+        invalidateAuthCache();
       }
       router.push("/");
       router.refresh();

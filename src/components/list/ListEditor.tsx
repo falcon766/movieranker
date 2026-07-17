@@ -70,50 +70,128 @@ export function ListEditor({ listId }: { listId: string }) {
     destination: SearchDestination,
     source: ListItem["source"] = "manual",
   ) {
+    if (items.some((i) => i.tmdb_id === movie.id)) {
+      setMessage("Already on this list");
+      return;
+    }
+
+    const now = new Date().toISOString();
+    const optimistic: ListItem = {
+      id: crypto.randomUUID(),
+      list_id: listId,
+      tmdb_id: movie.id,
+      title: movie.title,
+      year: movie.release_date
+        ? Number.parseInt(movie.release_date.slice(0, 4), 10)
+        : null,
+      poster_path: movie.poster_path,
+      position: destination === "bench" ? null : rankedCount + 1,
+      elo: 1000,
+      notes: null,
+      source,
+      locked: false,
+      created_at: now,
+      updated_at: now,
+    };
+
+    setItems((prev) => [...prev, optimistic]);
+    setMessage(
+      destination === "bench"
+        ? `${movie.title} sent to the bench`
+        : `Added ${movie.title}`,
+    );
+
     try {
-      await addMovie(listId, {
+      const saved = await addMovie(listId, {
+        id: optimistic.id,
         tmdb_id: movie.id,
         title: movie.title,
-        year: movie.release_date
-          ? Number.parseInt(movie.release_date.slice(0, 4), 10)
-          : null,
+        year: optimistic.year,
         poster_path: movie.poster_path,
         asBench: destination === "bench",
+        position: optimistic.position,
         source,
       });
-      await refresh();
-      setMessage(
-        destination === "bench"
-          ? `${movie.title} sent to the bench`
-          : `Added ${movie.title}`,
+      setItems((prev) =>
+        prev.map((i) => (i.id === optimistic.id ? saved : i)),
       );
     } catch (e) {
+      setItems((prev) => prev.filter((i) => i.id !== optimistic.id));
       setMessage(e instanceof Error ? e.message : "Could not add");
     }
   }
 
   async function handleReorder(orderedIds: string[]) {
-    await reorderRanked(listId, orderedIds);
-    await refresh();
+    const byId = new Map(items.map((i) => [i.id, i]));
+    const ranked = orderedIds
+      .map((id, index) => {
+        const item = byId.get(id);
+        if (!item) return null;
+        return { ...item, position: index + 1 };
+      })
+      .filter(Boolean) as ListItem[];
+    const bench = items.filter((i) => !orderedIds.includes(i.id));
+    const next = [...ranked, ...bench];
+    setItems(next);
+    try {
+      await reorderRanked(listId, orderedIds, next);
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : "Could not reorder");
+      await refresh();
+    }
   }
 
   async function handleBenchFromRank(id: string) {
     const item = items.find((i) => i.id === id);
-    await moveToBench(listId, id);
-    await refresh();
+    const next = items.map((i) =>
+      i.id === id ? { ...i, position: null } : i,
+    );
+    const ranked = next
+      .filter((i) => i.position != null)
+      .sort((a, b) => (a.position ?? 0) - (b.position ?? 0))
+      .map((row, index) => ({ ...row, position: index + 1 }));
+    const bench = next.filter((i) => i.position == null);
+    const merged = [...ranked, ...bench];
+    setItems(merged);
     if (item) setMessage(`${item.title} moved to the bench`);
+    try {
+      await moveToBench(listId, id, merged);
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : "Could not bench");
+      await refresh();
+    }
   }
 
   async function handleRemove(id: string) {
     const item = items.find((i) => i.id === id);
-    await removeItem(listId, id);
-    await refresh();
+    const filtered = items.filter((i) => i.id !== id);
+    const ranked = filtered
+      .filter((i) => i.position != null)
+      .sort((a, b) => (a.position ?? 0) - (b.position ?? 0))
+      .map((row, index) => ({ ...row, position: index + 1 }));
+    const bench = filtered.filter((i) => i.position == null);
+    const next = [...ranked, ...bench];
+    setItems(next);
     if (item) setMessage(`${item.title} removed`);
+    try {
+      await removeItem(listId, id, next);
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : "Could not remove");
+      await refresh();
+    }
   }
 
   async function promote(id: string) {
-    await promoteItem(listId, id);
-    await refresh();
+    const nextPos = rankedCount + 1;
+    setItems((prev) =>
+      prev.map((i) => (i.id === id ? { ...i, position: nextPos } : i)),
+    );
+    try {
+      await promoteItem(listId, id, nextPos);
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : "Could not rank");
+      await refresh();
+    }
   }
 
   async function setVisibility(visibility: ListVisibility) {
