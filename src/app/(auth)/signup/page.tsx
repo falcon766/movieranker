@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { GoogleAuthButton } from "@/components/GoogleAuthButton";
 import { isSupabaseConfigured } from "@/lib/config";
 import { createClient } from "@/lib/supabase/client";
 
@@ -54,7 +55,18 @@ export default function SignupPage() {
           : "Supabase isn’t configured — jump into local demo mode."}
       </p>
 
-      <form onSubmit={onSubmit} className="mt-8 space-y-4">
+      {configured && (
+        <div className="mt-8 space-y-4">
+          <GoogleAuthButton label="Sign up with Google" />
+          <div className="flex items-center gap-3 text-xs uppercase tracking-[0.2em] text-bone/30">
+            <span className="h-px flex-1 bg-line" />
+            or email
+            <span className="h-px flex-1 bg-line" />
+          </div>
+        </div>
+      )}
+
+      <form onSubmit={onSubmit} className="mt-4 space-y-4">
         {configured && (
           <>
             <input

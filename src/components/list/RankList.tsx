@@ -23,9 +23,11 @@ import type { ListItem } from "@/types/database";
 
 function SortableRow({
   item,
+  onBench,
   onRemove,
 }: {
   item: ListItem;
+  onBench: (id: string) => void;
   onRemove: (id: string) => void;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
@@ -72,13 +74,22 @@ function SortableRow({
           Elo {Math.round(item.elo)}
         </div>
       </div>
-      <button
-        type="button"
-        onClick={() => onRemove(item.id)}
-        className="rounded-full px-2 py-1 text-xs text-bone/35 hover:bg-white/5 hover:text-ember"
-      >
-        Remove
-      </button>
+      <div className="flex shrink-0 items-center gap-1">
+        <button
+          type="button"
+          onClick={() => onBench(item.id)}
+          className="rounded-full px-2.5 py-1 text-xs text-amber/80 hover:bg-amber/10 hover:text-amber"
+        >
+          Bench
+        </button>
+        <button
+          type="button"
+          onClick={() => onRemove(item.id)}
+          className="rounded-full px-2.5 py-1 text-xs text-bone/35 hover:bg-white/5 hover:text-ember"
+        >
+          Remove
+        </button>
+      </div>
     </li>
   );
 }
@@ -86,10 +97,12 @@ function SortableRow({
 export function RankList({
   items,
   onReorder,
+  onBench,
   onRemove,
 }: {
   items: ListItem[];
   onReorder: (orderedIds: string[]) => void;
+  onBench: (id: string) => void;
   onRemove: (id: string) => void;
 }) {
   const sensors = useSensors(
@@ -119,7 +132,7 @@ export function RankList({
   if (!ranked.length) {
     return (
       <div className="glass rounded-3xl px-6 py-12 text-center text-bone/45">
-        Search a movie to start your ranking.
+        Search a movie — Add to the list or Bench it for later.
       </div>
     );
   }
@@ -136,7 +149,12 @@ export function RankList({
       >
         <ul className="space-y-2">
           {ranked.map((item) => (
-            <SortableRow key={item.id} item={item} onRemove={onRemove} />
+            <SortableRow
+              key={item.id}
+              item={item}
+              onBench={onBench}
+              onRemove={onRemove}
+            />
           ))}
         </ul>
       </SortableContext>

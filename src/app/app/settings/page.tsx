@@ -42,6 +42,25 @@ export default function SettingsPage() {
         </section>
 
         <section>
+          <h2 className="display text-2xl text-bone">Google sign-in</h2>
+          <p className="mt-2 text-sm">
+            Enable Google in Supabase (Authentication → Providers → Google) and
+            add your Google Cloud OAuth Client ID + Secret. Authorized redirect
+            URI must be:
+          </p>
+          <code className="mt-2 block break-all rounded-xl bg-black/30 px-3 py-2 text-xs text-amber">
+            https://ujfuywajcxpkfvemiast.supabase.co/auth/v1/callback
+          </code>
+          <p className="mt-2 text-sm">
+            Also allow{" "}
+            <code className="text-amber">http://localhost:3000/auth/callback</code>{" "}
+            and your Vercel{" "}
+            <code className="text-amber">…/auth/callback</code> in Supabase
+            Redirect URLs.
+          </p>
+        </section>
+
+        <section>
           <h2 className="display text-2xl text-bone">Lists storage</h2>
           <p className="mt-2 text-sm">
             Rankings still save in this browser until we wire cloud sync to your

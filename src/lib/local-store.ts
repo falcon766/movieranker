@@ -156,6 +156,22 @@ export function addLocalMovie(
   return item;
 }
 
+/** Move a ranked item onto the bench and reindex remaining ranks. */
+export function moveLocalToBench(listId: string, itemId: string) {
+  const items = getLocalItems(listId);
+  const next = items.map((i) =>
+    i.id === itemId
+      ? { ...i, position: null, updated_at: new Date().toISOString() }
+      : i,
+  );
+  const ranked = next
+    .filter((i) => i.position != null)
+    .sort((a, b) => (a.position ?? 0) - (b.position ?? 0))
+    .map((item, index) => ({ ...item, position: index + 1 }));
+  const bench = next.filter((i) => i.position == null);
+  saveLocalItems(listId, [...ranked, ...bench]);
+}
+
 export function reorderLocalRanked(listId: string, orderedIds: string[]) {
   const items = getLocalItems(listId);
   const byId = new Map(items.map((i) => [i.id, i]));

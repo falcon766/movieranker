@@ -4,11 +4,16 @@ import { useEffect, useState } from "react";
 import { Poster } from "@/components/ui/Poster";
 import type { TmdbMovie } from "@/types/database";
 
+export type SearchDestination = "rank" | "bench";
+
 export function MovieSearch({
   onSelect,
   excludeIds = [],
 }: {
-  onSelect: (movie: TmdbMovie) => void | Promise<void>;
+  onSelect: (
+    movie: TmdbMovie,
+    destination: SearchDestination,
+  ) => void | Promise<void>;
   excludeIds?: number[];
 }) {
   const [q, setQ] = useState("");
@@ -47,6 +52,12 @@ export function MovieSearch({
     return () => clearTimeout(handle);
   }, [q, excludeIds]);
 
+  async function pick(movie: TmdbMovie, destination: SearchDestination) {
+    await onSelect(movie, destination);
+    setQ("");
+    setResults([]);
+  }
+
   return (
     <div className="space-y-3">
       <div className="relative">
@@ -67,30 +78,38 @@ export function MovieSearch({
           {results.map((movie) => {
             const year = movie.release_date?.slice(0, 4);
             return (
-              <li key={movie.id}>
-                <button
-                  type="button"
-                  className="flex w-full items-center gap-3 px-3 py-2.5 text-left transition hover:bg-white/5"
-                  onClick={async () => {
-                    await onSelect(movie);
-                    setQ("");
-                    setResults([]);
-                  }}
-                >
-                  <div className="relative h-14 w-10 shrink-0">
-                    <Poster
-                      path={movie.poster_path}
-                      title={movie.title}
-                      className="h-14 w-10"
-                      sizes="40px"
-                    />
-                  </div>
-                  <div className="min-w-0">
-                    <div className="truncate font-medium">{movie.title}</div>
-                    <div className="text-sm text-bone/45">{year || "—"}</div>
-                  </div>
-                  <span className="ml-auto text-xs text-amber">Add</span>
-                </button>
+              <li
+                key={movie.id}
+                className="flex items-center gap-3 px-3 py-2.5 transition hover:bg-white/5"
+              >
+                <div className="relative h-14 w-10 shrink-0">
+                  <Poster
+                    path={movie.poster_path}
+                    title={movie.title}
+                    className="h-14 w-10"
+                    sizes="40px"
+                  />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="truncate font-medium">{movie.title}</div>
+                  <div className="text-sm text-bone/45">{year || "—"}</div>
+                </div>
+                <div className="flex shrink-0 gap-1.5">
+                  <button
+                    type="button"
+                    className="rounded-full bg-amber px-3 py-1.5 text-xs font-semibold text-ink hover:bg-[#e0b06a]"
+                    onClick={() => void pick(movie, "rank")}
+                  >
+                    Add
+                  </button>
+                  <button
+                    type="button"
+                    className="rounded-full border border-line px-3 py-1.5 text-xs text-bone hover:border-amber/40 hover:text-amber"
+                    onClick={() => void pick(movie, "bench")}
+                  >
+                    Bench
+                  </button>
+                </div>
               </li>
             );
           })}

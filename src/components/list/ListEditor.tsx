@@ -2,13 +2,14 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { MovieSearch } from "@/components/MovieSearch";
+import { MovieSearch, type SearchDestination } from "@/components/MovieSearch";
 import { Bench } from "@/components/list/Bench";
 import { RankList } from "@/components/list/RankList";
 import {
   addLocalMovie,
   getLocalItems,
   getLocalList,
+  moveLocalToBench,
   reorderLocalRanked,
   saveLocalItems,
   updateLocalList,
@@ -20,7 +21,6 @@ export function ListEditor({ listId }: { listId: string }) {
   const [items, setItems] = useState<ListItem[]>([]);
   const [message, setMessage] = useState<string | null>(null);
   const [shareOpen, setShareOpen] = useState(false);
-  const [nextToBench, setNextToBench] = useState(false);
 
   const refresh = useCallback(() => {
     setList(getLocalList(listId));
@@ -34,8 +34,7 @@ export function ListEditor({ listId }: { listId: string }) {
   const excludeIds = useMemo(() => items.map((i) => i.tmdb_id), [items]);
   const rankedCount = items.filter((i) => i.position != null).length;
 
-  async function handleAdd(movie: TmdbMovie) {
-    const asBench = nextToBench;
+  async function handleSelect(movie: TmdbMovie, destination: SearchDestination) {
     try {
       addLocalMovie(listId, {
         tmdb_id: movie.id,
@@ -44,12 +43,11 @@ export function ListEditor({ listId }: { listId: string }) {
           ? Number.parseInt(movie.release_date.slice(0, 4), 10)
           : null,
         poster_path: movie.poster_path,
-        asBench,
+        asBench: destination === "bench",
       });
-      setNextToBench(false);
       refresh();
       setMessage(
-        asBench
+        destination === "bench"
           ? `${movie.title} sent to the bench`
           : `Added ${movie.title}`,
       );
@@ -63,15 +61,24 @@ export function ListEditor({ listId }: { listId: string }) {
     refresh();
   }
 
+  function handleBenchFromRank(id: string) {
+    const item = items.find((i) => i.id === id);
+    moveLocalToBench(listId, id);
+    refresh();
+    if (item) setMessage(`${item.title} moved to the bench`);
+  }
+
   function handleRemove(id: string) {
+    const item = items.find((i) => i.id === id);
     const next = items.filter((i) => i.id !== id);
     const ranked = next
       .filter((i) => i.position != null)
       .sort((a, b) => (a.position ?? 0) - (b.position ?? 0))
-      .map((item, index) => ({ ...item, position: index + 1 }));
+      .map((row, index) => ({ ...row, position: index + 1 }));
     const bench = next.filter((i) => i.position == null);
     saveLocalItems(listId, [...ranked, ...bench]);
     refresh();
+    if (item) setMessage(`${item.title} removed`);
   }
 
   function promote(id: string) {
@@ -174,28 +181,20 @@ export function ListEditor({ listId }: { listId: string }) {
             <ShareCopy path={invitePath} label="Invite link" />
           )}
           <p className="text-xs text-bone/35">
-            Local demo mode stores lists in this browser. Connect Supabase for
-            real accounts and cross-device sync.
+            Local demo mode stores lists in this browser. Cloud sync coming
+            next.
           </p>
         </div>
       )}
 
-      <div className="mb-8 space-y-2">
-        <MovieSearch excludeIds={excludeIds} onSelect={handleAdd} />
-        <label className="flex items-center gap-2 text-sm text-bone/45">
-          <input
-            type="checkbox"
-            checked={nextToBench}
-            onChange={(e) => setNextToBench(e.target.checked)}
-            className="accent-amber"
-          />
-          Add next pick to bench (unranked)
-        </label>
+      <div className="mb-8">
+        <MovieSearch excludeIds={excludeIds} onSelect={handleSelect} />
       </div>
 
       <RankList
         items={items}
         onReorder={handleReorder}
+        onBench={handleBenchFromRank}
         onRemove={handleRemove}
       />
 
