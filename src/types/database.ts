@@ -62,6 +62,23 @@ export type TmdbMovie = {
   vote_average?: number;
   vote_count?: number;
   popularity?: number;
+  /** Present when browsing a person's filmography */
+  credit_roles?: string[];
+};
+
+export type TmdbCompany = {
+  id: number;
+  name: string;
+  logo_path: string | null;
+  origin_country?: string;
+};
+
+export type TmdbPerson = {
+  id: number;
+  name: string;
+  profile_path: string | null;
+  known_for_department?: string;
+  known_for?: string[];
 };
 
 export type SuggestedMovie = TmdbMovie & {
