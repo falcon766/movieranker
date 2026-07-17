@@ -52,6 +52,13 @@ export function getLocalLists(): MovieList[] {
   );
 }
 
+/** Wipe browser-local lists/items after a successful cloud sync. */
+export function clearLocalListsData() {
+  if (typeof window === "undefined") return;
+  localStorage.removeItem(LISTS_KEY);
+  localStorage.removeItem(ITEMS_KEY);
+}
+
 export function getLocalList(id: string) {
   return getLocalLists().find((l) => l.id === id) ?? null;
 }

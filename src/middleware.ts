@@ -27,7 +27,21 @@ export async function middleware(request: NextRequest) {
     },
   });
 
-  await supabase.auth.getUser();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  const path = request.nextUrl.pathname;
+  const isApp = path === "/app" || path.startsWith("/app/");
+
+  // Cloud-only app: require sign-in for /app/*
+  if (isApp && !user) {
+    const login = request.nextUrl.clone();
+    login.pathname = "/login";
+    login.searchParams.set("next", path);
+    return NextResponse.redirect(login);
+  }
+
   return supabaseResponse;
 }
 

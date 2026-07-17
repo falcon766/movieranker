@@ -174,7 +174,7 @@ export function ListEditor({ listId }: { listId: string }) {
             {list.description ? ` · ${list.description}` : ""}
             <span className="mx-2 opacity-40">·</span>
             <span className="text-xs uppercase tracking-wider text-bone/35">
-              {cloud ? "Cloud sync" : "This device only"}
+              {cloud ? "Saved to your account" : "Sign in to sync"}
             </span>
           </p>
         </div>
@@ -232,9 +232,7 @@ export function ListEditor({ listId }: { listId: string }) {
             />
           )}
           <p className="text-xs text-bone/35">
-            {cloud
-              ? "This list syncs to your account across devices."
-              : "Sign in to sync lists across phone and desktop."}
+            Lists are saved to your account in the cloud — not on this device.
           </p>
         </div>
       )}

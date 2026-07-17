@@ -18,7 +18,7 @@ export default function LoginPage() {
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!configured) {
-      router.push("/app");
+      setError("Supabase isn’t configured yet.");
       return;
     }
     setLoading(true);
@@ -46,9 +46,7 @@ export default function LoginPage() {
       </Link>
       <h1 className="display mt-8 text-4xl">Welcome back</h1>
       <p className="mt-2 text-bone/50">
-        {configured
-          ? "Sign in to sync your lists."
-          : "Supabase isn’t configured yet — continue in local demo mode."}
+        Sign in — your lists live in the cloud on every device.
       </p>
 
       {configured && (
@@ -63,29 +61,31 @@ export default function LoginPage() {
       )}
 
       <form onSubmit={onSubmit} className="mt-4 space-y-4">
-        {configured && (
-          <>
-            <input
-              className="field"
-              type="email"
-              placeholder="Email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              required
-            />
-            <input
-              className="field"
-              type="password"
-              placeholder="Password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
-            />
-          </>
-        )}
+        <input
+          className="field"
+          type="email"
+          placeholder="Email"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          required
+          disabled={!configured}
+        />
+        <input
+          className="field"
+          type="password"
+          placeholder="Password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          required
+          disabled={!configured}
+        />
         {error && <p className="text-sm text-ember">{error}</p>}
-        <button type="submit" className="btn btn-primary w-full" disabled={loading}>
-          {loading ? "Signing in…" : configured ? "Sign in" : "Enter demo"}
+        <button
+          type="submit"
+          className="btn btn-primary w-full"
+          disabled={loading || !configured}
+        >
+          {loading ? "Signing in…" : "Sign in"}
         </button>
       </form>
 

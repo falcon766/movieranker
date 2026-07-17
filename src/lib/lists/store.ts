@@ -11,6 +11,7 @@ import {
 import {
   addLocalMovie,
   applyLocalBattle,
+  clearLocalListsData,
   createLocalList,
   deleteLocalList,
   getLocalItems,
@@ -306,6 +307,7 @@ export async function migrateLocalListsToCloud(
 
   if (imported > 0) {
     localStorage.setItem(flagKey, "1");
+    clearLocalListsData();
   } else if (errors.length) {
     throw new Error(errors[0]);
   }
@@ -424,6 +426,10 @@ export async function importBackupToCloud(backup: ListBackup): Promise<number> {
     imported += 1;
   }
 
+  if (imported > 0) {
+    clearLocalListsData();
+  }
+
   return imported;
 }
 
@@ -474,7 +480,7 @@ export async function createList(input: {
 }): Promise<MovieList> {
   const auth = await resolveAuth();
   if (!auth.cloud || !auth.userId) {
-    return createLocalList(input);
+    throw new Error("Sign in to create and sync lists across devices");
   }
 
   const supabase = createClient();
@@ -565,6 +571,15 @@ export async function ensureInviteLink(
   return `/invite/${token}`;
 }
 
+function requireCloud(auth: AuthContext): asserts auth is AuthContext & {
+  cloud: true;
+  userId: string;
+} {
+  if (!auth.cloud || !auth.userId) {
+    throw new Error("Sign in required — lists are cloud-only");
+  }
+}
+
 export async function addMovie(
   listId: string,
   movie: {
@@ -579,6 +594,7 @@ export async function addMovie(
 ) {
   const auth = await resolveAuth();
   if (!auth.cloud) {
+    if (isSupabaseConfigured()) requireCloud(auth);
     return addLocalMovie(listId, movie);
   }
 

@@ -54,9 +54,8 @@ export default function DashboardPage() {
           <p className="eyebrow">Your canons</p>
           <h1 className="display mt-2 text-4xl sm:text-5xl">Lists</h1>
           <p className="mt-2 text-sm text-bone/40">
-            {cloud
-              ? "Synced to your account — same lists on every device."
-              : "Local to this browser. Sign in to sync across devices."}
+            Cloud-only — same lists on phone and desktop when you&apos;re signed
+            in.
           </p>
         </div>
         <Link href="/app/lists/new" className="btn btn-primary">

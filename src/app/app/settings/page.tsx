@@ -29,10 +29,11 @@ export default function SettingsPage() {
     setStatus(null);
     try {
       const imported = await restoreLocalListsToCloud();
+      setLocalCount(countLocalLists());
       setStatus(
         imported > 0
-          ? `Restored ${imported} list${imported === 1 ? "" : "s"} to your account. Open Lists on any device.`
-          : "No local lists found in this browser to restore.",
+          ? `Moved ${imported} list${imported === 1 ? "" : "s"} to the cloud and cleared this browser’s local copy.`
+          : "No leftover local lists in this browser.",
       );
     } catch (e) {
       setStatus(e instanceof Error ? e.message : "Restore failed");
@@ -44,7 +45,7 @@ export default function SettingsPage() {
   function downloadBackup() {
     const backup = exportLocalBackup();
     if (!backup.lists.length) {
-      setStatus("No local lists in this browser to export.");
+      setStatus("No local leftovers to export.");
       return;
     }
     const blob = new Blob([JSON.stringify(backup, null, 2)], {
@@ -56,9 +57,7 @@ export default function SettingsPage() {
     a.download = `movieranker-backup-${new Date().toISOString().slice(0, 10)}.json`;
     a.click();
     URL.revokeObjectURL(url);
-    setStatus(
-      `Exported ${backup.lists.length} list${backup.lists.length === 1 ? "" : "s"}. AirDrop/email the file, then Import on the other device while signed in.`,
-    );
+    setStatus(`Exported ${backup.lists.length} list(s).`);
   }
 
   async function onImportFile(file: File) {
@@ -68,8 +67,9 @@ export default function SettingsPage() {
       const text = await file.text();
       const backup = JSON.parse(text) as ListBackup;
       const imported = await importBackupToCloud(backup);
+      setLocalCount(countLocalLists());
       setStatus(
-        `Imported ${imported} list${imported === 1 ? "" : "s"} into your account. Open Lists.`,
+        `Imported ${imported} list(s) to your cloud account.`,
       );
     } catch (e) {
       setStatus(e instanceof Error ? e.message : "Import failed");
@@ -94,67 +94,66 @@ export default function SettingsPage() {
         </section>
 
         <section>
-          <h2 className="display text-2xl text-bone">
-            Move a list between devices
-          </h2>
+          <h2 className="display text-2xl text-bone">Cloud-only lists</h2>
           <p className="mt-2 text-sm">
-            Older lists live in the browser that created them. The web cannot see
-            your phone’s storage until you push them up.
+            While signed in, new lists are saved only in Supabase — not in phone
+            or browser storage. Same account = same lists everywhere.
           </p>
-          <ol className="mt-3 list-decimal space-y-2 pl-5 text-sm">
-            <li>
-              On <strong className="text-bone">phone</strong> (where the list
-              is): sign in with Google → Settings
-            </li>
-            <li>
-              Tap <strong className="text-bone">Restore to cloud</strong>{" "}
-              <em>or</em> <strong className="text-bone">Export backup</strong>
-            </li>
-            <li>
-              On web: refresh Lists — or Import the backup file while signed in
-            </li>
-          </ol>
+        </section>
 
-          <p className="mt-4 text-xs text-bone/40">
-            Local lists found in <em>this</em> browser: {localCount}
+        {localCount > 0 && (
+          <section>
+            <h2 className="display text-2xl text-bone">
+              Leftover local lists ({localCount})
+            </h2>
+            <p className="mt-2 text-sm">
+              This browser still has old local copies from before cloud-only
+              mode. Move them up, then they&apos;re cleared here.
+            </p>
+            <div className="mt-4 flex flex-wrap gap-2">
+              <button
+                type="button"
+                className="btn btn-primary"
+                disabled={busy}
+                onClick={() => void restore()}
+              >
+                {busy ? "Working…" : "Move to cloud & clear local"}
+              </button>
+              <button
+                type="button"
+                className="btn btn-ghost"
+                onClick={downloadBackup}
+              >
+                Export backup
+              </button>
+            </div>
+          </section>
+        )}
+
+        <section>
+          <h2 className="display text-2xl text-bone">Import backup</h2>
+          <p className="mt-2 text-sm">
+            If you exported a JSON backup from another device, import it here
+            (signed in).
           </p>
-
-          <div className="mt-4 flex flex-wrap gap-2">
-            <button
-              type="button"
-              className="btn btn-primary"
-              disabled={busy || localCount === 0}
-              onClick={() => void restore()}
-            >
-              {busy ? "Working…" : "Restore to cloud"}
-            </button>
-            <button
-              type="button"
-              className="btn btn-ghost"
-              disabled={localCount === 0}
-              onClick={downloadBackup}
-            >
-              Export backup
-            </button>
-            <button
-              type="button"
-              className="btn btn-ghost"
-              disabled={busy}
-              onClick={() => fileRef.current?.click()}
-            >
-              Import backup
-            </button>
-            <input
-              ref={fileRef}
-              type="file"
-              accept="application/json,.json"
-              className="hidden"
-              onChange={(e) => {
-                const file = e.target.files?.[0];
-                if (file) void onImportFile(file);
-              }}
-            />
-          </div>
+          <button
+            type="button"
+            className="btn btn-ghost mt-4"
+            disabled={busy}
+            onClick={() => fileRef.current?.click()}
+          >
+            Import backup file
+          </button>
+          <input
+            ref={fileRef}
+            type="file"
+            accept="application/json,.json"
+            className="hidden"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) void onImportFile(file);
+            }}
+          />
           {status && <p className="mt-3 text-sm text-amber">{status}</p>}
         </section>
 
