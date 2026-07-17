@@ -164,56 +164,109 @@ export async function fetchLists(): Promise<{
   lists: MovieList[];
   cloud: boolean;
   profile: Profile | null;
+  localListCount: number;
 }> {
+  const localListCount = getLocalLists().length;
   const auth = await resolveAuth();
   if (!auth.cloud || !auth.userId) {
-    return { lists: getLocalLists(), cloud: false, profile: null };
+    return {
+      lists: getLocalLists(),
+      cloud: false,
+      profile: null,
+      localListCount,
+    };
   }
 
-  await migrateLocalListsIfNeeded(auth.userId);
-
   const supabase = createClient();
-  const { data, error } = await supabase
+  let { data, error } = await supabase
     .from("lists")
     .select("*")
     .eq("owner_id", auth.userId)
     .order("updated_at", { ascending: false });
   if (error) throw new Error(error.message);
+
+  // If cloud is empty but this browser still has local lists, import them
+  // (also retries if an earlier failed sync left a bad "migrated" flag).
+  if (!(data ?? []).length && localListCount > 0) {
+    clearMigrationFlag(auth.userId);
+    await migrateLocalListsToCloud(auth.userId, { force: true });
+    ({ data, error } = await supabase
+      .from("lists")
+      .select("*")
+      .eq("owner_id", auth.userId)
+      .order("updated_at", { ascending: false }));
+    if (error) throw new Error(error.message);
+  } else {
+    await migrateLocalListsToCloud(auth.userId);
+  }
+
   return {
     lists: (data ?? []).map((row) => mapList(row as Record<string, unknown>)),
     cloud: true,
     profile: auth.profile,
+    localListCount,
   };
 }
 
-/** One-time: push browser-local lists into the cloud account if cloud is empty. */
-async function migrateLocalListsIfNeeded(userId: string) {
-  const flagKey = `movieranker.migrated.${userId}`;
+function migrationFlagKey(userId: string) {
+  return `movieranker.migrated.${userId}`;
+}
+
+export function clearMigrationFlag(userId: string) {
   if (typeof window === "undefined") return;
-  if (localStorage.getItem(flagKey) === "1") return;
+  localStorage.removeItem(migrationFlagKey(userId));
+}
+
+export function countLocalLists() {
+  return getLocalLists().length;
+}
+
+/**
+ * Push browser-local lists into the signed-in cloud account.
+ * Returns how many lists were imported.
+ */
+export async function migrateLocalListsToCloud(
+  userId?: string,
+  options?: { force?: boolean },
+): Promise<number> {
+  const auth = userId
+    ? { userId, cloud: true as const }
+    : await resolveAuth();
+  if (!auth.cloud || !auth.userId) {
+    throw new Error("Sign in to restore lists to the cloud");
+  }
+
+  const flagKey = migrationFlagKey(auth.userId);
+  if (typeof window === "undefined") return 0;
+  if (!options?.force && localStorage.getItem(flagKey) === "1") return 0;
 
   const localLists = getLocalLists();
   if (!localLists.length) {
     localStorage.setItem(flagKey, "1");
-    return;
+    return 0;
   }
 
   const supabase = createClient();
-  const { count } = await supabase
+  const { count, error: countError } = await supabase
     .from("lists")
     .select("*", { count: "exact", head: true })
-    .eq("owner_id", userId);
+    .eq("owner_id", auth.userId);
+  if (countError) throw new Error(countError.message);
 
-  if ((count ?? 0) > 0) {
+  // Only auto-skip when cloud already has data and this isn't a forced restore
+  if (!options?.force && (count ?? 0) > 0) {
     localStorage.setItem(flagKey, "1");
-    return;
+    return 0;
   }
+
+  let imported = 0;
+  const errors: string[] = [];
 
   for (const list of localLists) {
     const { data: created, error } = await supabase
       .from("lists")
       .insert({
-        owner_id: userId,
+        owner_id: auth.userId,
         title: list.title,
         slug: `${list.slug}-${nanoid(4)}`.slice(0, 48),
         description: list.description,
@@ -223,11 +276,14 @@ async function migrateLocalListsIfNeeded(userId: string) {
       })
       .select("*")
       .single();
-    if (error || !created) continue;
+    if (error || !created) {
+      errors.push(error?.message || `Failed to import ${list.title}`);
+      continue;
+    }
 
     const items = getLocalItems(list.id);
     if (items.length) {
-      await supabase.from("list_items").insert(
+      const { error: itemsError } = await supabase.from("list_items").insert(
         items.map((i) => ({
           list_id: created.id,
           tmdb_id: i.tmdb_id,
@@ -241,10 +297,28 @@ async function migrateLocalListsIfNeeded(userId: string) {
           locked: i.locked,
         })),
       );
+      if (itemsError) {
+        errors.push(`${list.title}: ${itemsError.message}`);
+      }
     }
+    imported += 1;
   }
 
-  localStorage.setItem(flagKey, "1");
+  if (imported > 0) {
+    localStorage.setItem(flagKey, "1");
+  } else if (errors.length) {
+    throw new Error(errors[0]);
+  }
+
+  return imported;
+}
+
+/** Settings / recovery: force import local browser lists into cloud. */
+export async function restoreLocalListsToCloud() {
+  const auth = await resolveAuth();
+  if (!auth.userId) throw new Error("Sign in first");
+  clearMigrationFlag(auth.userId);
+  return migrateLocalListsToCloud(auth.userId, { force: true });
 }
 
 export async function fetchListBundle(listId: string): Promise<{
